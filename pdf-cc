@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# pdf-cc
+# A script to Clean and (re)Compress PDFs. For example Firefox (and other
+# SWs using Cairo library as a backend for 'Print to PDF') often makes PDFs
+# containing internal errors. Those usually do not prevent proper rendering
+# of such PDFs, however they may influence how PDF viewers work with them.
+
+errorExit() {
+    printf '%s!\n' "${1:-Unknown error occurred}" >&2
+    exit 1
+}
+
+replace() {
+    /bin/cp --attributes-only --preserve=mode,ownership -- "$2" "$1"
+    /bin/mv -f "$1" "$2"
+}
+
+QPDF="/usr/bin/qpdf"
+CLEANOPTS="--qdf --object-streams=disable --warning-exit-0"
+COMPRESSOPTS="--compress-streams=y --recompress-flate --object-streams=generate --compression-level=9 --warning-exit-0"
+
+TMPFA=$(mktemp --suffix=.pdf) ||
+    errorExit "Cannot create temporary file"
+TMPFB=$(mktemp --suffix=.pdf) ||
+    errorExit "Cannot create temporary file"
+
+trap '/bin/rm -f -- "$TMPFA" "$TMPFB"' EXIT
+
+KEEPORIG=1
+PDFF=""
+
+while (($#)); do
+    case $1 in
+        -n|--no-bcup)
+            KEEPORIG=0
+            ;;
+        *)
+            PDFF="$1"
+            ;;
+    esac
+    shift
+done
+
+[[ -z $PDFF ]] && errorExit "Missing PDF file name"
+[[ -f $PDFF ]] || errorExit "PDF file '$PDFF' not found"
+
+if (( KEEPORIG == 1 )); then
+    /bin/cp -i "$PDFF" "$PDFF.bak" || \
+        errorExit "Failed to create copy of '$PDFF'"
+fi
+
+$QPDF $CLEANOPTS "$PDFF" "$TMPFA" && \
+    $QPDF $COMPRESSOPTS "$TMPFA" "$TMPFB" && \
+    replace "$TMPFB" "$PDFF" || \
+    errorExit "Failure whilst cleaning and compressing '$PDFF' occurred"
+
+exit 0

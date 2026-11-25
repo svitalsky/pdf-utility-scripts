@@ -1,0 +1,37 @@
+Useful aliases and functions for bash
+
+
+alias pdf-vdiff='pdf-diff -g -v -d '
+
+
+pdf-join ()
+{
+    if [ "$2" = "" ]; then
+        echo "Syntax: 'pdf-join pdf-1.pdf pdf-2.pdf [pdf-N.pdf] [output.pdf]' where output.pdf must not exist" 1>&2;
+        return 1;
+    else
+        output_pdf="";
+        pdfs="";
+        for arg in "$@";
+        do
+            if [[ -f $arg ]]; then
+                pdfs="$pdfs $arg";
+            else
+                if [ "$output_pdf" != "" ]; then
+                    echo "$arg does not exist!" 1>&2;
+                else
+                    output_pdf="$arg";
+                fi;
+            fi;
+        done;
+        [ "$output_pdf" != "" ] || output_pdf="output.pdf";
+        if [[ -f $output_pdf ]]; then
+            echo "The output file '$output_pdf' already exists." 1>&2;
+            return 1;
+        else
+            gs -sDEVICE=pdfwrite -dNOPAUSE -dQUIET -dBATCH -dAutoRotatePages=/None -sOutputFile="$output_pdf" $pdfs;
+        fi;
+        unset output_pdf pdfs arg;
+    fi
+}
+

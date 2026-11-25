@@ -1,0 +1,139 @@
+#!/bin/bash
+
+# This script check PDF(s) for PDF errors, that is errors that
+# do not prevent rendering of the PDF in your common viewers,
+# however may prevent their correct rendering or rasterization
+# in printers or other softwares.
+
+
+errorExit() {
+    printf '%s!\n' "${1:-Unknown error occurred}" >&2
+    exit 1
+}
+
+
+printHelp() {
+    printf 'put some help here when we add more options\n'
+}
+
+
+mainHeader() {
+    local line='**********************************************************'
+    local introline='******'
+    local lvl=$2
+    local txt="$1"
+    case $lvl in
+        1)
+            printf '%s\n%s\n%s %s\n%s\n%s\n\n' \
+                "$line" "$line" "$introline" "$txt" "$line" "$line"
+            ;;
+        2)
+            printf '\n%s\n%s %s\n%s\n\n' \
+                "$line" "$introline" "$txt" "$line"
+            ;;
+    esac
+}
+
+header() {
+    printf '\n%s:\n' "$1"
+}
+
+displayBasicInfo() {
+    mainHeader "Basic info for '$1'" 2
+    header "pdfinfo '$1'"
+    pdfinfo "$1"
+    header "pdffonts '$1'"
+    pdffonts "$1"
+    header "pdfimages -list '$1'"
+    pdfimages -list "$1"
+}
+
+displayObjects() {
+    # ??? --- will see, probably later with specific option only
+    qpdf --qdf --object-streams=disable "$1" /tmp/.tested.pdf
+    grep -an -C 3 '/[A-Z][/a-zA-Z0-9]*$' /tmp/.tested.pdf
+}
+
+checkWithQPDF() {
+    mainHeader "Checking '$1' with QPDF" 2
+    qpdf --check "$1" 2>&1
+}
+
+checkWithGS() {
+    mainHeader "Checking '$1' with Ghostscript" 2
+    gs -dBATCH -dNOPAUSE -sDEVICE=nullpage "$1" 2>&1
+    # gs -dBATCH -dNOPAUSE -dPDFSTOPONERROR -sDEVICE=nullpage "$1" 2>&1
+}
+
+checkWithPoppler() {
+    mainHeader "Checking '$1' with Poppler" 2
+    pdftoppm -r 72 "$1" 2>&1 1> /dev/null
+}
+
+checkWithMuPDF() {
+    mainHeader "Checking '$1' with MuPDF" 2
+    mutool draw -F ppm -o /dev/null -r 72 "$1" 2>&1
+}
+
+PDFS=()
+
+while (($#)); do
+    case $1 in
+        -h)
+            printHelp
+            exit 0
+            ;;
+        --)
+            shift
+            PDFS+=("$@")
+            break
+            ;;
+        -*)
+            errorExit "Unknown option '$1'"
+            ;;
+        *)
+            PDFS+=("$1")
+            ;;
+    esac
+    shift
+done
+
+((${#PDFS[@]} == 0)) && \
+    errorExit 'At least one PDF file is required'
+
+
+mapfile -d '' -t PDFS < <(
+    for pdf in "${PDFS[@]}"; do
+        pdf=$(readlink -f -- "$pdf") || continue
+        [[ -f $pdf ]] || continue
+        [[ ${pdf,,} == *.pdf ]] || continue
+        [[ $(file -b --mime-type -- "$pdf") == application/pdf ]] || continue
+
+        printf '%s\0' "$pdf"
+    done |
+        sort -zu |
+        awk -v RS='\0' -v ORS='\0' '{
+            basename = $0
+            sub(/^.*\//, "", basename)
+            print basename "\t" $0
+        }' |
+        sort -z -t $'\t' -k1,1f -k2 |
+        cut -z -f2-
+)
+
+
+{
+    for ii in "${!PDFS[@]}"; do
+        pdf=${PDFS[ii]}
+        (( ii == 0 )) || printf '\n\n\n\n\n'
+        mainHeader "Processing PDF $pdf" 1
+        displayBasicInfo "$pdf"
+        checkWithQPDF "$pdf"
+        checkWithGS "$pdf"
+        checkWithPoppler "$pdf"
+        checkWithMuPDF "$pdf"
+    done
+} | less -I -p '\b(error|warning|invalid|damaged|corrupt)\b'
+
+exit 0
+

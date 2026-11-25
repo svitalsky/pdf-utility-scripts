@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+
+EXECUTABLE="$HOME/bin/apps/pdf-diff/bin/diff-pdf"
+
+# The original name invokes the real program without wrapper processing.
+if [[ ${0##*/} == diff-pdf ]]; then
+    exec "$EXECUTABLE" "$@"
+fi
+
+errorExit() {
+    printf '%s!\n' "${1:-Unknown error occurred}" >&2
+    exit 2
+}
+
+# Show exactly the amount of output requested, without changing the exit status.
+show_output() {
+    local output=$1
+    [[ -z $output ]] && return 0
+    case $VERBOSE in
+        0) ;;
+        1) grep -v 'pixels that differ' <<< "$output" || : ;;
+        2) grep -v 'has 0 pixels that differ' <<< "$output" || : ;;
+        3) [[ -z $output ]] || printf '%s\n' "$output" ;;
+        *) errorExit 'Unexpected verbosity level' ;;
+    esac
+}
+
+VERBOSE=0
+DIRECT_OUTPUT=0
+GUI=0
+OUTPUT_FILE=''
+SKIP=(-s)
+PDFS=()
+
+while (($#)); do
+    case $1 in
+        -h)
+            exec "$EXECUTABLE" -h
+            ;;
+        -v|-vv|-vvv)
+            level=$((${#1} - 1))  # length of -v, -vv or -vvv
+            VERBOSE=$(( VERBOSE > level ? VERBOSE : level ))
+            ;;
+        -a|--all)
+            SKIP=()
+            ;;
+        -g|--view)
+            GUI=1
+            ;;
+        -o)
+            (($# >= 2)) || errorExit 'Missing output file name'
+            [[ -n $2 ]] || errorExit 'Missing output file name'
+            OUTPUT_FILE=$2
+            shift
+            ;;
+        -d)
+            DIRECT_OUTPUT=1
+            ;;
+        --)
+            shift
+            PDFS+=("$@")
+            break
+            ;;
+        -*)
+            errorExit "Unknown option '$1'"
+            ;;
+        *)
+            PDFS+=("$1")
+            ;;
+    esac
+    shift
+done
+
+((${#PDFS[@]} == 2)) || errorExit 'Exactly two input PDF files are required'
+PDF1=${PDFS[0]}
+PDF2=${PDFS[1]}
+
+# The executable treats output as having precedence
+[[ -n $OUTPUT_FILE ]] && GUI=0
+((GUI > 0)) || DIRECT_OUTPUT=0
+
+if [[ -n $OUTPUT_FILE && -e $OUTPUT_FILE ]]; then
+    errorExit "Output file '$OUTPUT_FILE' already exists"
+fi
+
+if cmp -s -- "$PDF1" "$PDF2"; then
+    if ((VERBOSE)) || ((GUI)) || [[ -n $OUTPUT_FILE ]]; then
+        printf "Files '%s' and '%s' are binary identical.\n" "$PDF1" "$PDF2"
+    fi
+    if ((GUI)); then
+        read -r -p 'Still display the GUI diff? [y/N] ' answer
+        [[ $answer == y ]] || exit 0
+    elif [[ -n $OUTPUT_FILE ]]; then
+        read -r -p 'Still produce diff PDF file? [y/N] ' answer
+        [[ $answer == y ]] || exit 0
+    else
+        exit 0
+    fi
+fi
+
+args=(-m "${SKIP[@]}")
+if ((GUI)) && [[ -z $OUTPUT_FILE ]]; then
+    args+=(--view)
+fi
+if ((VERBOSE || GUI)); then
+    args+=(-v)
+fi
+if [[ -n $OUTPUT_FILE ]]; then
+    args+=("--output-diff=$OUTPUT_FILE")
+fi
+args+=("$PDF1" "$PDF2")
+
+# echo "${args[@]}"
+if ((GUI && DIRECT_OUTPUT)); then
+    printf '\n        WARNING: Direct output requested, exit status is irrelevant.\n\n' >&2
+    case $VERBOSE in
+        0) "$EXECUTABLE" "${args[@]}" &>/dev/null ;;
+        1) stdbuf -oL "$EXECUTABLE" "${args[@]}" 2>/dev/null | grep -v 'pixels that differ' ;;
+        2) stdbuf -oL "$EXECUTABLE" "${args[@]}" 2>/dev/null | grep -v 'has 0 pixels that differ' ;;
+        3) "$EXECUTABLE" "${args[@]}" 2>/dev/null ;;
+    esac
+    exit 0
+
+fi
+
+output=$("$EXECUTABLE" "${args[@]}" 2>/dev/null)
+status=$?
+
+# The GUI reports success even when PDFs differ. Infer differences from its
+# verbose per-page output, preserving the underlying status on actual failures.
+if ((GUI)) && ((status == 0)); then
+    if grep -qE 'has [1-9][0-9]* pixels that differ' <<< "$output" ; then
+        status=1
+    fi
+fi
+
+show_output "$output"
+exit "$status"
